@@ -3,16 +3,15 @@
 Annotate an image with a red bounding box and optional label.
 Used by the find-package skill to highlight matched packages on shelf photos.
 
-Usage:
+Usage (manual boxes):
     python3 annotate.py --input photo.jpg --output result.jpg --box "x1,y1,x2,y2" --label "取件码: 5-2-1234"
 
-Multiple boxes:
-    python3 annotate.py --input photo.jpg --output result.jpg \
-        --box "100,200,300,400" --label "5-2-1234" \
-        --box "500,200,700,400" --label "3-1-5678"
+Usage (from OCR detections):
+    python3 annotate.py --input photo.jpg --output result.jpg --detections detections.json --match "9347"
 """
 
 import argparse
+import json
 import sys
 import os
 
@@ -104,10 +103,14 @@ def main():
     parser = argparse.ArgumentParser(description="Annotate image with red bounding boxes")
     parser.add_argument("--input", "-i", required=True, help="Input image path")
     parser.add_argument("--output", "-o", required=True, help="Output image path")
-    parser.add_argument("--box", "-b", action="append", required=True,
+    parser.add_argument("--box", "-b", action="append", default=[],
                         help="Bounding box as 'x1,y1,x2,y2' (can specify multiple)")
     parser.add_argument("--label", "-l", action="append", default=[],
                         help="Label for each box (optional, can specify multiple)")
+    parser.add_argument("--detections", "-d", default=None,
+                        help="JSON file from ocr_detect.py (alternative to --box)")
+    parser.add_argument("--match", "-m", default=None,
+                        help="Comma-separated codes to match in detections")
     parser.add_argument("--line-width", type=int, default=None,
                         help="Line width in pixels (auto-scales if not set)")
     parser.add_argument("--font-size", type=int, default=None,
@@ -116,14 +119,43 @@ def main():
     args = parser.parse_args()
 
     boxes = []
-    for b in args.box:
-        coords = [int(c.strip()) for c in b.split(",")]
-        if len(coords) != 4:
-            print(f"ERROR: Box must have 4 coordinates, got: {b}", file=sys.stderr)
-            sys.exit(1)
-        boxes.append(coords)
+    labels = []
 
-    annotate(args.input, args.output, boxes, args.label or [],
+    if args.detections:
+        # Load detections from OCR JSON
+        with open(args.detections, "r", encoding="utf-8") as f:
+            detections = json.load(f)
+
+        if args.match:
+            match_codes = [c.strip() for c in args.match.split(",")]
+            for det in detections:
+                for code in match_codes:
+                    if code in det["text"] or det["text"] in code:
+                        boxes.append(det["bbox"])
+                        labels.append(f"取件码: {code}")
+                        break
+        else:
+            # No match filter — annotate all detections
+            for det in detections:
+                boxes.append(det["bbox"])
+                labels.append(det["text"])
+    else:
+        # Manual --box mode
+        if not args.box:
+            parser.error("Either --box or --detections is required")
+        for b in args.box:
+            coords = [int(c.strip()) for c in b.split(",")]
+            if len(coords) != 4:
+                print(f"ERROR: Box must have 4 coordinates, got: {b}", file=sys.stderr)
+                sys.exit(1)
+            boxes.append(coords)
+        labels = args.label or []
+
+    if not boxes:
+        print("No matching detections found.", file=sys.stderr)
+        sys.exit(1)
+
+    annotate(args.input, args.output, boxes, labels,
              line_width=args.line_width, font_size=args.font_size)
 
 

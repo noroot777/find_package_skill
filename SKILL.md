@@ -16,6 +16,10 @@ allowed-tools: ["message"]
 
 Help users find their packages on delivery station shelves. The user provides a pickup code and shelf photos, and you identify which package matches — marking it with a red bounding box and sending the annotated image back.
 
+This skill combines two approaches:
+- **Claude vision**: understands user intent, reads pickup codes from screenshots (SMS, apps)
+- **EasyOCR engine**: provides precise bounding box coordinates for text on shelf photos
+
 ## Workflow
 
 ### Step 1: Get the pickup code (取件码)
@@ -45,27 +49,57 @@ The user may send:
 - A single photo of one shelf section
 - Multiple photos covering different shelf sections
 
-### Step 3: Recognize and match
+### Step 3: Recognize and match (OCR + annotate)
 
-For each shelf photo the user sends:
-
-1. **Read the image** with your vision capabilities — identify all visible package labels, tracking numbers, and pickup codes on the shelf
-2. **Match** the detected codes against the user's pickup code
-3. If a match is found:
-   - Note the bounding box coordinates (in pixels) of the matching package label
-   - Use the annotation script to draw a prominent red bounding box:
+For each shelf photo, use the one-stop script that runs OCR detection, matches pickup codes, and annotates the image:
 
 ```bash
+python3 {baseDir}/scripts/find_package.py \
+  --input /path/to/shelf_photo.jpg \
+  --code "9347" \
+  --output /tmp/find-package-result.jpg
+```
+
+For multiple pickup codes at once:
+```bash
+python3 {baseDir}/scripts/find_package.py \
+  --input /path/to/shelf_photo.jpg \
+  --code "9347,0295,1339" \
+  --output /tmp/find-package-result.jpg
+```
+
+The script outputs JSON to stdout with match results:
+```json
+{
+  "total_codes": 3,
+  "found": 2,
+  "not_found": 1,
+  "matched": [
+    {"text": "9347", "bbox": [45, 280, 130, 340], "confidence": 0.95, "matched_code": "9347"},
+    {"text": "0295", "bbox": [200, 310, 350, 360], "confidence": 0.92, "matched_code": "0295"}
+  ],
+  "unmatched_codes": ["1339"],
+  "output_image": "/tmp/find-package-result.jpg"
+}
+```
+
+If you need finer control, the two steps can be run separately:
+
+```bash
+# Step 1: OCR detect
+python3 {baseDir}/scripts/ocr_detect.py \
+  --input /path/to/shelf_photo.jpg \
+  --output /tmp/detections.json
+
+# Step 2: Annotate matches
 python3 {baseDir}/scripts/annotate.py \
   --input /path/to/shelf_photo.jpg \
   --output /tmp/find-package-result.jpg \
-  --box "x1,y1,x2,y2" \
-  --label "取件码: 5-2-1234"
+  --detections /tmp/detections.json \
+  --match "9347"
 ```
 
-   - Send the annotated image back to the user via the message tool with `media: "file:///tmp/find-package-result.jpg"`
-
-4. If no match is found in this photo, tell the user and ask if there are more shelves to check
+After getting the annotated image, send it back to the user via the message tool.
 
 ### Step 4: Report results
 
@@ -91,7 +125,7 @@ python3 {baseDir}/scripts/annotate.py \
   - `X-Y-ZZZZ` (e.g., 5-2-1234)
   - Just numbers on a label
   - QR codes (if you can't read QR, tell the user to provide the text code instead)
-- When drawing bounding boxes, make them visually prominent: thick red lines, with the pickup code label above the box
+- The red bounding boxes are drawn by the OCR engine with precise coordinates — do not guess coordinates yourself
 - If the shelf photo is blurry or codes are unreadable, ask for a clearer photo rather than guessing
 
 ## Sending Messages
